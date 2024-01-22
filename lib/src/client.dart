@@ -58,44 +58,63 @@ abstract class StatsdClient {
   ///
   /// If [prefix] is provided it will be prepended to all metric names that are
   /// sent via this client.
-  factory StatsdClient(StatsdConnection connection, {String? prefix}) {
-    return _StatsdClient(connection, prefix ?? '');
+  factory StatsdClient(StatsdConnection connection, {String? prefix, Map<String, String>? dogTags}) {
+    return _StatsdClient(connection, prefix ?? '', dogTags: dogTags);
   }
 }
 
 /// Composes StatsD packet
-String _packet(String prefix, String name, String value, String type, [double? sampleRate]) {
+String _packet(String prefix, String name, String value, String type, [double? sampleRate, String? dogStatsDTags]) {
   var rateValue = sampleRate is double ? '|@${sampleRate}' : '';
-  return '${prefix}${name}:${value}|${type}${rateValue}';
+  dogStatsDTags ??= '';
+  return '${prefix}${name}:${value}|${type}${rateValue}$dogStatsDTags';
+}
+
+/// Generate tags for the DogStatsD datagram extension
+/// https://docs.datadoghq.com/developers/dogstatsd/datagram_shell?tab=metrics
+String _dogStatsDTags(Map<String, String>? dogTags) {
+  if (dogTags == null || dogTags.isEmpty) {
+    return '';
+  }
+  var kv = <String>{};
+  dogTags.forEach((k, v) {
+    kv.add("$k:$v");
+  });
+
+  return '|#${kv.join(',')}';
 }
 
 class _StatsdClient implements StatsdClient {
   final StatsdConnection connection;
   final String prefix;
-  _StatsdClient(this.connection, this.prefix);
+  late final String _dogTags;
+
+  _StatsdClient(this.connection, this.prefix, {Map<String, String>? dogTags}) {
+    _dogTags = _dogStatsDTags(dogTags);
+  }
 
   @override
   Future gauge(String name, int value) {
-    var packet = _packet(prefix, name, value.toString(), 'g');
+    var packet = _packet(prefix, name, value.toString(), 'g', null, _dogTags);
     return connection.send(packet);
   }
 
   @override
   Future gaugeDelta(String name, int delta) {
     var value = (delta < 0) ? '${delta}' : '+${delta}';
-    var packet = _packet(prefix, name, value, 'g');
+    var packet = _packet(prefix, name, value, 'g', null, _dogTags);
     return connection.send(packet);
   }
 
   @override
   Future count(String name, [int delta = 1, double? sampleRate]) {
-    var packet = _packet(prefix, name, delta.toString(), 'c', sampleRate);
+    var packet = _packet(prefix, name, delta.toString(), 'c', sampleRate, _dogTags);
     return connection.send(packet);
   }
 
   @override
   Future set(String name, int value) {
-    var packet = _packet(prefix, name, value.toString(), 's');
+    var packet = _packet(prefix, name, value.toString(), 's', null, _dogTags);
     return connection.send(packet);
   }
 
@@ -107,12 +126,12 @@ class _StatsdClient implements StatsdClient {
   @override
   Future timeDuration(String name, Duration duration, [double? sampleRate]) {
     final msec = duration.inMilliseconds.toString();
-    final packet = _packet(prefix, name, msec, 'ms', sampleRate);
+    final packet = _packet(prefix, name, msec, 'ms', sampleRate, _dogTags);
     return connection.send(packet);
   }
 
   @override
-  StatsdBatch batch() => StatsdBatch._(connection, prefix);
+  StatsdBatch batch() => StatsdBatch._(connection, prefix, dogTags: _dogTags);
 }
 
 /// Batch of StatsD packets.
@@ -127,10 +146,10 @@ class _StatsdClient implements StatsdClient {
 class StatsdBatch {
   final StatsdConnection _connection;
   final String _prefix;
-
+  final String? _dogTags;
   var _packets = <String>[];
 
-  StatsdBatch._(this._connection, this._prefix);
+  StatsdBatch._(this._connection, this._prefix, {String? dogTags}) : _dogTags = dogTags;
 
   /// Adds counter metric specified by [name] to this batch.
   ///
@@ -141,12 +160,12 @@ class StatsdBatch {
   /// counter is being sampled. For instance, value `0.1` means that the counter
   /// is sampled every 1/10th of the time.
   void count(String name, [int delta = 1, double? sampleRate]) {
-    _packets.add(_packet(_prefix, name, delta.toString(), 'c', sampleRate));
+    _packets.add(_packet(_prefix, name, delta.toString(), 'c', sampleRate, _dogTags));
   }
 
   /// Adds arbitrary value (gauge) to this batch.
   void gauge(String name, int value) {
-    _packets.add(_packet(_prefix, name, value.toString(), 'g'));
+    _packets.add(_packet(_prefix, name, value.toString(), 'g', null, _dogTags));
   }
 
   /// Updates gauge specified by [name] by the value provided in [delta].
@@ -156,12 +175,12 @@ class StatsdBatch {
   /// first setting it to zero.
   void gaugeDelta(String name, int delta) {
     var value = (delta < 0) ? '${delta}' : '+${delta}';
-    _packets.add(_packet(_prefix, name, value, 'g'));
+    _packets.add(_packet(_prefix, name, value, 'g', null, _dogTags));
   }
 
   /// Adds value into a Set specified by [name].
   void set(String name, int value) {
-    _packets.add(_packet(_prefix, name, value.toString(), 's'));
+    _packets.add(_packet(_prefix, name, value.toString(), 's', null, _dogTags));
   }
 
   /// Adds timing metric value to this batch.
@@ -173,7 +192,7 @@ class StatsdBatch {
   /// is sampled every 1/10th of the time.
   void time(String name, Stopwatch stopwatch, [double? sampleRate]) {
     var msec = stopwatch.elapsedMilliseconds.toString();
-    _packets.add(_packet(_prefix, name, msec, 'ms', sampleRate));
+    _packets.add(_packet(_prefix, name, msec, 'ms', sampleRate, _dogTags));
   }
 
   /// Sends this batch to the server.

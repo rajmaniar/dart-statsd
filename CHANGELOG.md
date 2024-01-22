@@ -1,3 +1,8 @@
+## [1.0.0]
+
+- Update to Dart sdk version >3.0.0 <4.0.0
+- Add support for DogStatsD Tags (this should really be a whole new project but this was faster)
+
 ## [0.3.0]
 
 - Null Safety Migration
